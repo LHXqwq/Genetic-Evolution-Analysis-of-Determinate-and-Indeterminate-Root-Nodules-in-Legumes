@@ -1,0 +1,639 @@
+1.Canu
+#install
+git clone https://github.com/marbl/canu.git
+cd canu/src
+make -j 5
+#In the preliminary preparation, Canu directly integrated the similar steps of the previous second-generation sequencing assembly into one tool.
+mkdir raw
+cp /path/to/data/* ./raw
+#Correct mistakes
+mkdir clean
+path/to/caun/Darwin-amd64/bin/canu -correct -p Medicago \		#output file prefix
+-d ./clean	#output folder merylThreads=5 \	#Threads
+gnuplotTested=true \	#Detect whether there is a gnuplot program, gnuplotTested=true can skip checking genomeSize=1m	#Estimated genome size minReadLength=2000 \	#lengths less than this value will not be used for assembly
+minOverlapLength=500 corOutCoverage=120 corMinCoverage=2 \
+-pacbio-raw ./raw/ Medicago.fasta	#raw sequencing file
+#Trim reads. Like the second generation, the bases measured each time are also obtained by the ratio of different signals to the corresponding bases. So the quality value is also high and low. What also affects it is the quality value calculated according to the formula of the proportion occupied by the four colors. It has to be removed here.
+mkdir trim
+path/to/caun/Darwin-amd64/bin/canu -trim -p trim -d ./trim maxThreads=8 \
+gnuplotTested=true genomeSize=1m minReadLength=2000 \
+minOverlapLength=500 -pacbio-corrected ./clean/clean.correctedReads.fasta.gz
+#Assembly, where the error rate needs to be adjusted.
+path/to/caun/Darwin-amd64/bin/canu -assemble -p assemble -d assemble \
+maxThreads=20 gnuplotTested=true genomeSize=120m\ 
+correctedErrorRate=0.050 \ -pacbio-corrected ./trim/trim.trimmedReads.fasta.gz
+
+2. Pilon
+#install
+wget https://github.com/broadinstitute/pilon/releases/download/v1.23/pilon-1.23.jar
+java -Xmx16G -jar pilon-1.23.jar
+#Comparison. The Illumina paired-end data obtained by PCR-free library construction and sequencing is used to avoid PCR-duplication, more effective data, and no need to mark duplicates during the analysis process.
+bwa index -p index/draft draft.fa
+bwa mem -t 20 index/draft read_1.fq.gz read_2.fq.gz | samtools sort -@ 10 -O bam -o align.bam
+samtools index -@ 10 align.bam
+#Marker repeats (non-PCR-free library)
+sambamba markdup -t 10 align.bam align_markdup.bam
+#Filter reads for high quality alignments
+samtools view -@ 10 -q 30 align_markdup.bam > align_filter.bam
+samtools index -@ 10 align_filter.bam
+#Correction using Pilon.
+--frags indicates that the input is a paired-end library within 1 Kb, --jumps indicates a mate pair library greater than 1k, and --bam allows the software to automatically run according to the default parameters
+-vcf: output a vcf file containing information about each base
+--fix: Pilon --variant: Heuristic variant detection, equivalent to --vcf --fix all,breaks
+minmq: Minimum read alignment quality for Pilon stacking, default is 0.
+MEMORY= #Depends on the size of the genome
+java -Xmx${MEMORY}G -jar pilon-1.23.jar --genome draft.fa --frags align_filer.bam --fix snps,indels --output pilon_polished --vcf &> pilon.log
+
+3. LACHESIS
+(1) CLUSTER_MIN_RE_SITES = 22
+(2) CLUSTER_MAX_LINK_DENSITY=2
+(3) CLUSTER_NONINFORMATIVE_RATIO = 2
+(4) ORDER_MIN_N_RES_IN_TRUN=10
+(5) ORDER_MIN_N_RES_IN_SHREDS=10。
+
+4. BUSCO
+#download BUSCO
+cd ~/Applications/download
+wget -c https://gitlab.com/ezlab/busco/-/archive/master/busco-master.zip -O busco.zip
+#download Augustus
+wget -c http://bioinf.uni-greifswald.de/augustus/binaries/augustus.current.tar.gz
+#download HMMER
+wget -c http://eddylab.org/software/hmmer/hmmer.tar.gz -O hmmer.tar.gz
+#download BLAST
+wget -c ftp://ftp.ncbi.nlm.nih.gov/blast/executables/LATEST/ncbi-blast-2.7.1+-x64-linux.tar.gz
+#install busco
+unzip busco.zip
+mv busco-master busco 
+mv busco ../
+cd ../busco
+python setup.py install
+cd ~/Applications/download
+#install Augustus
+tar -xzvf augustus.current.tar.gz
+cd augustus-3.3.1
+cd ../
+mv augustus-3.3.1 ../
+cd ../augustus-3.3.1
+#Open the common.mk file and comment out ZIPINPUT = true (that is, add a # sign at the top)
+vim common.mk
+make
+cd ~/Applications/download
+#install HMMER
+tar -xzvf hmmer.tar.gz
+cd hmmer-3.2.1
+./configure
+make
+#install BLAST+
+tar -xzvf ncbi-blast-2.7.1+-x64-linux.tar.gz
+mv ncbi-blast-2.7.1+ ../blast+-2.7.1-linux
+cd ~/Applications/download
+rm busco.zip
+rm augustus.current.tar.gz
+rm hmmer.tar.gz
+rm ncbi-blast-2.7.1+-x64-linux.tar.gz
+#Download database file
+mkdir -p ~/database/BUSCO/
+cd ~/database/BUSCO/
+wget -c https://busco.ezlab.org/datasets/embryophyta_odb9.tar.gz
+tar -xzvf embryophyta_odb9.tar.gz
+cp config.ini_default config.ini
+vim ~/Applications/busco/config/config.ini
+#Add the following to the configuration file
+# BUSCO specific configuration
+# It overrides default values in code and dataset cfg, and is overridden by arguments in command line
+# Uncomment lines when appropriate
+[busco]
+# Input file
+;in = ./sample_data/target.fa
+# Run name, used in output files and folder
+;out = SAMPLE
+# Where to store the output directory
+# out_path = /workdir
+# Path to the BUSCO dataset
+;lineage_path = ./sample_data/example
+# Which mode to run (genome / protein / transcriptome)
+;mode = genome
+# How many threads to use for multithreaded steps
+;cpu = 1
+# Domain for augustus retraining, eukaryota or prokaryota
+# Do not change this unless you know exactly why !!!
+;domain = eukaryota
+# Force rewrite if files already exist (True/False)
+;force = False
+# Restart mode (True/False)
+;restart = False
+# Blast e-value
+;evalue = 1e-3
+# Species to use with augustus, for old datasets only
+;species = fly
+# Augustus extra parameters
+# Use single quotes, like this: '--param1=1 --param2=2'
+;augustus_parameters = ''
+# Tmp folder
+;tmp_path = ./tmp/
+# How many candidate regions (contigs, scaffolds) to consider for each BUSCO
+;limit = 3
+# Augustus long mode for retraining (True/False)
+;long = False
+# Quiet mode (True/False)
+;quiet = False
+# Debug logs (True/False), it needs Quiet to be False
+debug = True
+# tar gzip output files (True/False)
+;gzip = False
+# Force single core for the tblastn step
+;blast_single_core = True
+[tblastn]
+# path to tblastn
+path = ~/Applications/blast+-2.7.1-linux/bin
+[makeblastdb]
+# path to makeblastdb
+path = ~/Applications/blast+-2.7.1-linux/bin
+[augustus]
+# path to augustus
+path = ~/Applications/augustus-3.3.1/bin
+[etraining]
+# path to augustus etraining
+path = ~/Applications/augustus-3.3.1/bin
+# path to augustus perl scripts, redeclare it for each new script        
+[gff2gbSmallDNA.pl]                                               
+path = ~/Applications/augustus-3.3.1/scripts                         
+[new_species.pl]                                                   
+path = ~/Applications/augustus-3.3.1/scripts                         
+[optimize_augustus.pl]                                              
+path = ~/Applications/augustus-3.3.1/scripts                            
+[hmmsearch]                                                      
+# path to HMMsearch executable                                    
+path = ~/Applications/hmmer-3.2.1/src                                 
+[Rscript]                                                          
+#path to Rscript, if you wish to use the plot tool                     
+path = /usr/bin/
+#import environment variables
+#The folder where the executable file of the augustus tool is located
+export PATH="/home/ssd/Applications/augustus-3.3.1/bin:$PATH"
+#The folder where the additional scripts of the augustus tool are located
+export PATH="/home/ssd/Applications/augustus-3.3.1/scripts:$PATH"
+#The location of the augustus tool configuration file. AUGUSTUS_CONFIG_PATH requires an absolute path
+export AUGUSTUS_CONFIG_PATH="/home/ssd/Applications/augustus-3.3.1/config"
+#The folder where the executable file of the hmmer tool is located
+export PATH="/home/ssd/Applications/hmmer-3.2.1/src:$PATH"
+#The folder where the executable file of the BLAST+ tool is located
+export PATH="/home/ssd/Applications/blast+-2.7.1-linux/bin:$PATH"
+#Open the .bash_profile file
+vim ~/.bash_profile
+# Add the contents of the above import environment variable at the end
+# run evaluation
+run_BUSCO.py -i [assembled file.fasta] -l [database folder] -o [output] -m [evaluation mode] [some other options]
+# draw
+mkdir my_summaries
+cp run_SPEC1/short_summary_SPEC1.txt my_summaries/.
+cp run_SPEC2/short_summary_SPEC2.txt my_summaries/.
+cp run_SPEC3/short_summary_SPEC3.txt my_summaries/.
+cp run_SPEC4/short_summary_SPEC4.txt my_summaries/.
+cp run_SPEC5/short_summary_SPEC5.txt my_summaries/.
+python scripts/generate_plot.py –wd my_summaries
+
+5. CEGMA
+#install CEGMA 
+wget https://github.com/KorfLab/CEGMA_v2/archive/refs/tags/v2.5.zip
+tar -zxvf cegma_v2.5.tar.gz
+make 
+#import environment variables
+export CEGMA="path"
+export CEGMATMP="path"
+export PERL5LIB="$PERL5LIB:$CEGMA/lib"
+#Run a CEGMA assessment
+cegma --genome sample.dna --prot_num 4 --protein ORTH.fa --hmm_prefix ORTH \ --hmm_profiles hmm_profiles\  --cutoff_file profiles_cutoff.tbl
+
+6. LTR FINDER
+#install LTR FINDER
+wget https://github.com/xzhub/LTR_Finder/blob/master/build/LTR_FINDER.x86_64-1.0.7.tar.gz 
+tar -pzxvf LTR_FINDER.x86_64-1.0.7.tar.gz  #Can be used directly after decompression
+#LTR FINDER runs
+./ltr_finder -C -w 2 -s eukaryotic-tRNAs.fa genome.fa 1> ./genome.fa.ltr_finder  2>./genome.fa.log #-s The eukaryotic tRNA database is specified, download link http://lowelab.ucsc.edu/GtRNAdb/download.html
+
+7. MITE-Hunter
+#install MITE-Hunter
+wget http://target.iplantcollaborative.org/mite_hunter.html\
+perl MITE_Hunter_Installer.pl -d /opt/biosoft/MITE_Hunter/ \  #MITE_hunter unzipped folder path -f /opt/biosoft/blast-2.29/formatdb \ # path to formatdb
+-b /opt/biosoft/blast-2.29/blastall \ #blastall的路径 -m /opt/biosoft/mdust/mdust \ #path to mdust -M /opt/biosoft/muscle/muscle # path to muscle
+#MITE-Hunter run
+perl MITE_Hunter_manager.pl -i TAIR10.fa -g thaliana -n 5 -S 12345678 -P 1 &
+
+8. RepeatModeler
+#install RepeatModeler
+wget http://www.repeatmasker.org/RepeatModeler/RepeatModeler-2.0.1.tar.gz
+tar -pzxvf RepeatModeler-2.0.1.tar.gz
+cd RepeatModeler-2.0.1
+perl ./configure
+/software/Share/perl-5.26.3/bin/perl 	#path to perl
+/software/annotation/RepeatMasker	#path to repeatmasker
+/software/annotation/RECON-1.08/bin	#path to RECON
+/software/annotation/RepeatScout-1.0.6	#path to RepeatScout
+/software/annotation/TRF-4.10/bin/trf	#path to TRF
+Enter the selected search engine: RMBlast and ABBlast, the default setting is RMBlast
+/software/annotation/genometools/bin	#path to LtrHarvest
+/software/annotation/LTR_retriever-2.9.0	#path to Ltr_retriever
+/software/annotation/mafft-7.471/bin	#path to MAFFT
+#RepeatModeler run
+BuildDatabase -engine ncbi -name genome ./00.data/genome.fa 	#The first step is to input the fasta file to build a library
+#The second step is to execute the RepeatModeler software
+RepeatModeler -database genome -engine ncbi -pa 10  -LTRStruct >&run.out
+Then based on three strategies, de novo prediction, homology prediction and coding gene prediction and integration based on transcriptome data.
+
+9. Genscan
+#install Genscan
+mkdir GENSCANS 
+cd GENSCANS 
+mv /genscanlinux.tar.uue ./
+#unzip
+sudo apt-get install sharutils 
+uudecode genscanlinux.tar.uue 
+tar -xvf genscanlinux.tar 
+#ensure permissions
+chmod a+x genscan 
+chmod a+r *.smat
+#Install genscan and configuration files (*.smat) into your environment variables
+mv genscan /usr/bin/genscan 
+mkdir /usr/lib/GENSCAN 
+mv *.smat /usr/lib/GENSCAN
+#Genscan run
+genscan /usr/lib/GENSCAN/Arabidopsis.smat myseq.fasta -ps output.ps > output.txt
+
+10. Augustus
+#install Augustus
+wget http://bioinf.uni-greifswald.de/augustus/binaries/augustus.2.7.tar.gz
+tar zxf augustus.2.7.tar.gz
+cd augustus.2.7
+cd src
+make -j 8
+export AUGUSTUS_CONFIG_PATH=$PWD/../config/ 
+#Augustus run
+augustus --strand=both --genemode=partial --singlestrand=false 
+--hintsfile=hints.gff --extrinsicCfgFile=extrinsic.cfg --protein=on 
+--introns=on --start=on --stop=on --cds=on 
+--codingseq=on --alternatives-from-evidence=true --gff3=on 
+--UTR=on ----outfile=out.gff --species=human genome.fa
+augustus --noprediction=true --species=SPECIES sequences.gb
+
+11. GlimmerHMM
+#install GlimmerHMM
+tar -xzf GlimmerHMM-3.0.4.tar.gz
+#GlimmerHMM run
+glimmerhmm_linux fasta.file -d trained_dir/arabidopsis -g -n 1
+
+12. GeneID
+#install GeneID
+git clone https://github.com/guigolab/geneid
+tar -zxvf geneid.tar.gz cd geneid
+make
+#add environment variable
+vim ~/.bashrc
+export PATH="/data/cm/software/geneid/bin:$PATH" source ~/.bashrc
+#GeneID run
+#Download the github project file
+github clone https://github.com/fcamara7/GeneidTRAINerDocker
+tar zxvf GeneidTRAINerDocker    
+cd GeneidTRAINerDocker    
+#start the docker service  
+service docker start    
+#Install the docker image 
+docker build -t geneidtrainerdocker .
+docker run -u $(id -u):$(id -g) -v /root/geneid_training/Cand:/data -w /data geneidtrainerdocker \  
+-species Cand -gff ./input/CryptoDB-52_Candersoni30847.gff2 \  
+-fastas ./input/CryptoDB-52_Candersoni30847_Genome.fasta \  
+-results ./output/ -reduced no  
+ls *.fa|cut -d "." -f 1 |while read id ;do  
+nohup geneid -3 -P /data/cm/software/geneid/param/Cand.geneid.param \ 
+${id}.fa >geneid/${id}_gi.gff &  
+Done
+
+13. SNAP
+#install SNAP
+wget ftp://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/taxonomic_divisions/uniprot_sprot_plants.dat.gz
+zcat uniprot_sprot_plants.dat.gz |\
+awk '{if (/^ /) {gsub(/ /, ""); print} else if (/^AC/) print ">" $2}' |\
+sed 's/;$//'> protein.fa
+#SNAP run
+#Use maker -CTL to create a new configuration file and set the following options
+genome=genome.fa
+est=tissue1.fa,tissue2.fa,tissue3.fa
+est_gff=tissue1.gff,tissue2.gff,tissue3.gff
+protein=protein.fa
+est2genome=1
+protein2genome=1
+#After processing the results, create a new snap directory to train the model
+mkdir snap && cd snap
+gff3_merge -d ../genome.maker.output/genome_master_datastore_index.log
+#Build the input file with makerzff
+maker2zff -c 0.8 -e 0.8 -o 0.8 -x 0.2 genome.all.gff
+#If the second term of the QI value is -1, it means that there is no EST evidence to support the cleavage site, and then build the model
+fathom -categorize 1000 genome.ann genome.dna
+fathom -export 1000 -plus uni.ann uni.dna
+forge export.ann export.dna
+hmm-assembler.pl snap . > ../snap.hmm
+#Modify the configuration and rerun. MAKER will automatically handle the conflicting parts, avoiding some double calculations such as repeated sequence masking.
+genome=genome.fa
+est=Trinity-GG.fasta
+protein=protein.fa
+snap=snap.hmm
+est2genome=0
+protein2genome=0
+#Train the model again based on the output
+mkdir snap2 && cd snap2
+gff3_merge -d ../genome.maker.output/genome_master_datastore_index.log
+fathom -categorize 1000 genome.ann genome.dna
+fathom -export 1000 -plus uni.ann uni.dna
+forge export.ann export.dna
+hmm-assembler.pl snap . > ../snap2.hmm
+
+14. GeMoMa
+#install GeMoMa
+conda install gemoma
+#GeMoMa run
+./pipeline.sh tblastn ~/data/genome.fa ~/data/ref.gff ~/data/ref.fa 30 ~/result FR_UNSTRANDED  ~/data/RNA.bam
+
+15. Hisat和Stringtie
+#install Hisat
+wget  ftp://ftp.ccb.jhu.edu/pub/infphilo/hisat2/downloads/hisat2-2.1.0-source.zip
+#Hisat runs, builds the index, the required options are the file path where the genome is located and the prefix of the output, hisat2-buld will also find exons and splice_sites by itself when running
+hisat2-build Medicago.genome 
+hisat2 --dta  -p 6 --max-intronlen 5000000 -x Medicago.genome -1 C1-1_good_1.fq -2 C1-1_good_2.fq -S C1-1.HISAT_aln.sam  >hisat2_running.log 2>&1
+samtools view -F 4 -Su C1-1.HISAT_aln.sam  | samtools sort -T C1-1.accepted_hits -o C1-1.accepted_hits.bam  &&   samtools index C1-1.accepted_hits.bam.bai
+#install Stringtie
+wget http://ccb.jhu.edu/software/stringtie/dl/stringtie-1.3.3b.Linux_x86_64.tar.gz
+#Stringtie runs, and then uses stringtie to assemble the transcriptome, which will generate a gtf file for each bam file, which mainly records the assembly information of the transcript
+stringtie C1-1.accepted_hits.bam -G Medicago.gtf -l C1-1 -o C1-1.transcripts.gtf
+#Then use the software stringtie to merge several gtf files containing transcript information into one gtf. At this time, the file names of several GTF files need to be entered into the mergelist.txt file in advance. The downloaded data has given the file, execute There will be an additional GTF file, namely stringtie_merged.gtf.
+stringtie --merge -G Oryza_sativa.IRGSP-1.0.gtf -F 0.1 -T 0.1 -i -o StringTie_merged.gtf mergelist.txt
+#To compare the quantitative information of transcripts of different samples, it is necessary to store the transcript information in the same format. Generally, the output results of the assembly software are gtf or gff. Since a large amount of new transcript information is generated during the assembly process, and we only observe its only annotation information—the starting position on the chromosome by the naked eye, it is obvious that the biological meaning contained in it cannot be clarified. Therefore, We need to compare them with the known transcript annotation file ---annotation.gtf, and establish a link between the newly obtained transcript and the annotated transcript, which allows us to better discover new transcripts .
+gffcompare -r Medicago.gtf StringTie_merged.gtf
+#Screen for new genes. Start with the class codes of the GTF file, which record the position of each transcript relative to known transcripts. Through this class_code, we generally select 3 types of transcripts in intronic regions, new transcripts in intergenic regions, and antisense transcripts in known exons.
+perl get_track.pl -gtf  gffcmp.annotated.gtf -index rice  -out rice.newGene.track.list.info
+$gtf = abs_path($gtf);
+my %newGene_track;
+open IN,"$gtf" || die $!;
+while (<IN>) {
+chomp;
+next if (/^$/ || /^\#/);
+my @tmp = split/\t+/,$_;
+my @info = split/;/,$tmp[8];
+my ($gene_track,$geneID,$iso_track,$isoID,$class_code);
+if ($tmp[8]=~/class_code \"u\";/) {
+$tmp[8]=~/transcript_id\s\"([^\"]+)\";\sgene_id\s\"([^\"]+)\";\sxloc/;
+$gene_track=$2;
+$iso_track=$1;
+$newGene_track{$gene_track}{$iso_track}=1;
+next;
+}
+}
+close IN;
+open OUT,">$out" || die $!;
+my $i=1;
+foreach my $gene_track (sort keys %newGene_track) {
+my $gene_name = "$index"."_newGene"."_$i";
+my $j = 1;
+foreach my $iso_track (sort keys %{$newGene_track{$gene_track}}) {
+my $iso_name = "$gene_name".".$j";
+print OUT "$gene_track\t$gene_name\t$iso_track\t$iso_name\n";
+$j++;
+}
+$i++;
+}
+close OUT;
+#Extract longest ORF in FASTA sequence
+TransDecoder.LongOrfs -t Medicago.newGene.transcript.fa -O longest_orfs.pep
+#Merge known and new GFFs
+cat Medicago.newGene_final.filtered.gff Oryza_sativa.IRGSP-1.0.gff >final.gff
+
+16. TransDecoder
+#install TransDecoder
+mkdir -p ~/opt/biosoft && cd ~/opt/biosoft
+wget https://github.com/TransDecoder/TransDecoder/archive/TransDecoder-v5.5.0.zip
+unzip TransDecoder-v5.5.0.zip
+mv TransDecoder-TransDecoder-v5.5.0 TransDecoder-v5.5.0
+2）TransDecoder run
+#Extract FASTA sequences from GTF files
+~/opt/biosoft/TransDecoder-v5.5.0/util/gtf_genome_to_cdna_fasta.pl transcripts.gtf genome.fasta > transcripts.fasta
+#Convert GTF files to GFF3 format
+~/opt/biosoft/TransDecoder-v5.5.0/util/gtf_to_alignment_gff3.pl transcripts.gtf > transcripts.gff3
+#Predict the long open reading frame in the transcript, the default is 100 amino acids, which can be modified with -m
+~/opt/biosoft/TransDecoder-v5.5.0/TransDecoder.LongOrfs -t transcripts.fasta
+#Use DIAMOND to search the transcripts.fasta.transdecoder.pep output in the previous step in the protein database to find the support of homology evidence
+#Download data and unzip
+wget ftp://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/      
+uniprot_sprot.fasta.gz
+gunzip uniprot_sprot.fasta.gz
+#index
+diamond makedb --in uniprot_sprot.fasta --db uniprot_sprot.fasta
+# BLASTP alignment
+diamond blastp -d uniprot_sprot.fasta -q transcripts.fasta.transdecoder_dir/longest_orfs.pep --evalue 1e-5 --max-target-seqs 1 > blastp.outfmt6
+#Predict possible coding regions
+~/opt/biosoft/TransDecoder-v5.5.0/TransDecoder.Predict -t transcripts.fasta \
+--retain_blastp_hits blastp.outfmt6 
+#Generate coding region annotation files based on reference genomes
+~/opt/biosoft/TransDecoder-v5.5.0/util/cdna_alignment_orf_to_genome_orf.pl \
+transcripts.fasta transdecoder.gff3 transcripts.gff3 transcripts.fasta > transcripts.fasta.transdecoder.genome.gff3
+
+17. GeneMark-ES
+#install GeneMark-ES
+tar -xf gmes_linux_64.tar
+cp gm_key_64 ~/.gm_key
+#GeneMark-ES run
+#Conduct pair RNA-seq pair training
+gmes_petap.pl --sequence sequence.fna --ET introns.gff --et_score 10 --cores 10
+#install STAR
+tar -zxf 2.7.5a.tar.gz
+cd STAR-2.7.5a/source
+makr STAR
+#STAR comparison
+mkdir -p star_index
+STAR --runThreadN 20 --runMode genomeGenerate --genomeDir star_index
+--genomeFastaFiles reference.fa
+STAR --runThreadN 20 --runMode alignReads --genomeDir star_index \
+--readFilesIn read_1.fq.gz read_2.fq.gz --readFilesCommand zcat \
+--outSAMtype BAM SortedByCoordinate --outWigType wiggle read2
+#获得introns.gff
+star_to_gff.pl --star  SJ.out.tab --gff SJ.gff --label introns
+#gene prediction
+gmes_petap.pl --sequence ref.fa --ET introns.gff --cores 10
+
+18. EVM
+#install EVM
+wget -4 https://github.com/EVidenceModeler/EVidenceModeler/archive/v1.1.1.tar.gz
+tar xf v1.1.1.tar.gz
+#EVM run
+#Create weights file
+cp ~ /EVidenceModeler-1.1.1/simple_example/weights.txt ./
+vi weights.txt
+ABINITIO_PREDICTION augustus 4
+TRANSCRIPT assembler-database.sqlite 7
+OTHER_PREDICTION transdecoder 8
+#The first column is the source type, which is divided into: ABINITIO_PREDICTION, PROTEIN, TRANSCRIPT, the second column corresponds to the second column of the gff3 file, and the third column is the weight, which divides the original data for subsequent parallelization
+/EVidenceModeler-1.1.1/EvmUtils/partition_EVM_inputs.pl --genome ref.fa \
+--gene_predictions gene_predictions.gff3 --transcript_alignments transcript_alignments.gff3 --segmentSize 100000 --overlapSize 10000 \
+--partition_listing partitions_list.out
+#Create a parallel operation command and execute it
+~/opt/biosoft/EVidenceModeler-1.1.1/EvmUtils/write_EVM_commands.pl --genome ref.fa --weights `pwd`/weights.txt --gene_predictions gene_predictions.gff3 --transcript_alignments transcript_alignments.gff3 \
+--output_file_name evm.out  --partitions partitions_list.out >  commands.list
+~/opt/biosoft/EVidenceModeler-1.1.1/EvmUtils/execute_EVM_commands.pl commands.list
+#Merge run results
+~/opt/biosoft/EVidenceModeler-1.1.1/EvmUtils/recombine_EVM_partial_outputs.pl --partitions partitions_list.out --output_file_name evm.out
+#Convert the result to GFF3
+~/opt/biosoft/EVidenceModeler-1.1.1/EvmUtils/convert_EVM_outputs_to_GFF3.pl --partitions partitions_list.out -- output evm.out --genome ref.fa
+find . -regex ".*evm.out.gff3" -exec cat {} \; | bedtools sort -i - > EVM.all.gff
+#filter gff files
+gffread EVM.all.gff -g input/genome.fa -y tr_cds.fa
+bioawk -c fastx '$seq < 50 {print $comment}' tr_cds.fa | cut -d '=' -f 2 > short_aa_gene_list.txt
+grep -v -w -f short_aa_gene_list.txt EvM.all.gff > filter.gff
+
+19. Infenal
+#install Infenal
+conda install infernal=1.1.3
+#Infenal run
+gunzip Rfam.cm.gz  #Unzip the Rfam database
+cmpress Rfam.cm  #Build a library
+cmscan --tblout test.out -E 1e-5 -o test.result Rfam.cm config.fa  #retrieve
+20. tRNAscan-SE
+#install tRNAscan-SE
+wget http://lowelab.ucsc.edu/software/tRNAscan-SE.tar.gz
+tar zxf tRNAscan-SE.tar.gz
+cd tRNAscan-SE-1.3.1
+make && make install
+make testrun
+echo 'PATH=$PATH: /sam/tRNAscanSE /bin/' >> ~/.bashrc
+echo 'PERL5LIB=$PERL5LIB: /sam/tRNAscanSE/bin/' >> ~/.bashrc
+source ~/.bashrc
+#tRNAscan-SE运行
+tRNAscan-SE -o tRNA.out -f rRNA.ss -m tRNA.stats genome.fasta
+
+21. GeneWise
+#install GeneWise
+wget http://www.ebi.ac.uk/~birney/wise2/wise2.4.1.tar.gz
+tar zxf wise2.4.1.tar.gz -C /opt/biosoft/
+cd /opt/biosoft/src
+#Replace glib-config in all makefiles in the src directory with glib-2.0
+find . -name  makefile | xargs sed -i 's/glib-config/pkg-config glib-2.0/'   
+#Replace the part where the function name in the genewise use library has changed, such as getline, now getline_ReadSeqVar
+perl -p -i -e 's/getline/getline_ReadSeqVars/g' ./HMMer2/sqio.c   
+perl -p -i -e 's/isnumber/isdigit/' models/phasemodel.c
+perl -p -i -e's/csh welcome.csh/sh welcome.csh/'  makefile #change csh to sh
+sed -i 's/-ldyna_glib/-ldyna_glib `pkg-config --libs glib-2.0`/' models/makefile #Solve the bug of the compilation process g_hash_table_foreach_remove
+make all  #Finally compile and test
+export WISECONFIGDIR=~/home/yt/biotools/wise2.4.1/wisecfg
+make test
+echo 'PATH=$PATH:~/home/yt/biotools/wise2.4.1/src/bin/' >> ~/.bashrc  #Modify environment variables
+echo 'export WISECONFIGDIR=~/home/yt/biotools/wise2.4.1/wisecfg/' >> ~/.bashrc 
+source ~/.bashrc
+#GeneWise run
+#The protein sequence and DNA sequence input by the program are 2 fasta files respectively. Only the first sequence in the two fasta files is valid, and genewise only aligns the two first sequences. The above example performs CDS prediction on both the positive and negative strands of the DNA sequence, and outputs the result file in gff format to standard output.
+genewise protein.fasta dna.fasta -both -gff
+#Gene sequence and protein comparison genewise
+genewise protein.pep cosmid.dna  #Compare protein sequences with DNA sequences
+genewise -hmmer pkinase.hmm cosmid.dna  #Compare the protein profile HMM with the DNA sequence
+genewisedb protein.pep human.fa  # Compare a single protein sequence to a DNA sequence database
+genewisedb -hmmer pkinase.hmm human.fa  # Combine a single protein profile HMM with a DNA sequence database
+genewisedb -prodb protein.pep -dnas cosmid.dna  # Compare protein database sequences to single dna sequences
+genewisedb -pfam Pfam -dnas cosmid.dna  #Compare the database of protein profiles HMM to a single DNA sequence
+genewisedb -prodb protein.pep human.fa  # Compare protein database sequences to DNA database sequences
+genewisedb -pfam Pfam human.fa  #Compare the database of protein profiles HMM to the database of single sequences
+#BLAST v2.2.31 alignment (-evalue 1e-5) between the predicted gene sequences and functional databases such as NR, KOG, GO, KEGG, TrEMBL, etc., to perform gene KEGG pathway annotation analysis, KOG function annotation analysis, and GO function annotation Analysis of isogenic functional annotation analysis.
+#Download the latest NR/NT database at NCBI
+makeblastdb -in nr -dbtype prot -parse_seqids -hash_index -out nr -logfile log.txt
+#Build sub-libraries of the NR database
+blastdb_aliastool -seqidlist sequence.seq -db nr -out nr_plant -title nr_plant
+#BLASTX alignment
+blastx -query query.fa -db nr_plant
+
+22. KOG
+#The method of KOG annotation is the same as COG. Using KOG annotations for eukaryotes
+wget ftp://ftp.ncbi.nih.gov/pub/COG/KOG/kyva
+makeblastdb -in kyva -dbtype prot -title kog -parse_seqids -out /opt/biosoft/ncbi-blast-2.2.28+/db/kog -logfile /opt/biosoft/ncbi-blast-2.2.28+/db/kog.log
+cat /opt/biosoft/ncbi-blast-2.2.28+/db/kog.log
+#使用BLASTP将基因组蛋白质序列比对到COG数据库
+blast.pl blastp kog proteins.fasta 1e-5 4 kog 5
+blast.pl blastp kog proteins.fasta 1e-5 4 cog 5
+#Download the koghefun.txt file for the KOG database. The kog file contains the correspondence between the KOG number and the sequence name in the KOG database, as well as the correspondence between the KOG number and the 25 categories; fun.txt is the descriptive information for the 25 categories. Based on the information of these two files, we write a program to process the results of BLAST and obtain KOG annotations.
+mkdir ~/bin/kog
+wget ftp://ftp.ncbi.nih.gov/pub/COG/COG/whog -P ~/bin/kog
+wget ftp://ftp.ncbi.nih.gov/pub/COG/COG/fun.txt -P ~/bin/kog
+kog_from_xml.pl kog.xml 1e-5
+
+23. Swiss-Prot和TrEMBL
+gunzip uniprot_sprot.fasta.gz  #unzip
+makeblastdb-in uniprot_sprot.fasta-dbtype prot #index
+gunzip uniprot_trembl.fasta.gz#unzip
+makeblastdb -in uniprot_trembl.fasta-dbtype prot #Build an index, and then perform a BLAST comparison directly.
+
+24. MCScan
+#install JCVI
+pip install jcvi
+#JCVI run
+#GFF to bed
+python3.6 -m jcvi.formats.gff bed --type=mRNA --key=transcript_id Medicago.gff3 > Medicago.bed
+#bed deduplication
+python3.6 -m jcvi.formats.bed uniq Medicago.bed
+#Extract cds from cds file based on bed file information
+seqkit grep -f <(cut -f 4 Medicago.bed ) Medicago.genome.fa | seqkit seq -i > Medicago.cds
+python3.6 -m jcvi.compara.catalog ortholog --no_strip_names Medicago Medicagov3
+#draw bar chart
+python3.6 -m jcvi.compara.synteny depth --histogram Medicago.Medicagov3.anchors
+#Create simple file
+python3.6 -m jcvi.compara.synteny screen --simple Medicago.Medicagov3.anchors Medicago.Medicagov3.anchors.new 
+#seqids
+Chr1,Chr2,Chr3,Chr4,Chr5,Chr6
+Chr1,Chr2,Chr3,Chr4,Chr5,Chr6
+#layout
+# y, xstart, xend, rotation, color, label, va, bed 
+.6, .2, .8, 0, , Medicago, top, Medicago.bed 
+.4, .2, .8, 0, , Medicagov3, top, Medicagov3.bed 
+# edges 
+e, 0, 1, Medicago.Medicagov3.anchors.simple
+#draw
+python3.6 -m jcvi.graphics.karyotype seqids layout --shadestyle=line
+
+25. OrthoFinder
+#install OrthoFinder 
+wget https://github.com/davidemms/OrthoFinder/releases/download/2.5.4/OrthoFinder.tar.gz
+tar xzf OrthoFinder_source.tar.gz
+#OrthoFinder run
+nohup orthofinder -M msa -T fasttree -f legume -t 16 &
+
+26. r8s
+#install r8s
+wget http://loco.biosci.arizona.edu/r8s/r8s.dist.tgz
+tar zxf r8s.dist.tgz -C /opt/biosoft/
+mv /opt/biosoft/dist /opt/biosoft/r8s
+echo 'PATH=$PATH:/opt/biosoft/r8s/' >> ~/.bashrx
+source ~/.bashrc
+#r8s run
+r8s -b -f r8s_in.txt > r8s_out.txt 
+# r8s_in.txt is as follows
+#nexus
+begin trees;
+tree tree_1 = [&R] 
+((Zea_mays:0.159433,Oryza_sativa:0.172489)N1:0.133977,(Arabidopsis_thaliana:0.281416,(Parasponia_andersonii:0.21309,((Senna_tora:0.132695,Prosopis_alba:0.113408)N5:0.0506695,(((Lupinus_albus:0.0532675,Lupinus_angustifolius:0.0304779)N9:0.0997257,(Arachis_duranensis:0.00923396,(Arachis_ipaensis:0.00656138,Arachis_hypogaea:3.31953e-06)N13:0.00927317)N10:0.129301)N7:0.0128923,((((((Trifolium_pratense:0.0523856,Trifolium_subterraneum:0.0702395)N23:0.0424957,Medicago_truncatula:0.0687778)N19:0.0242403,Cicer_arietinum:0.0714629)N16:0.0424736,Trifolium_medium:0.299943)N14:0.0498032,Medicago_japonicus:0.110579)N11:0.0156863,(Abrus_precatorius:0.0703277,((Cajanus_cajan:0.0593397,(Spatholobus_suberectus:0.0609275,Mucuna_pruriens:0.104353)N20:0.0155053)N17:0.0092885,((Glycine_soja:0.000119392,Glycine_max:0.00034032)N21:0.0530555,(Phaseolus_vulgaris:0.0417047,((Vigna_angularis:0.014678,Vigna_radiata:0.0140854)N25:0.0145434,Vigna_unguiculata:0.0233158)N24:0.0191202)N22:0.0388503)N18:0.0106369)N15:0.0223748)N12:0.0251837)N8:0.0149623)N6:0.0293046)N4:0.0505511)N3:0.0418336)N2:0.133977)N0;
+end;
+begin r8s;
+blformat lengths=persite nsites=300000 ulrametric=no;
+round=no；
+MRCA LM Medicago_japonicus Medicago_truncatula;
+fixage taxon=LM age=58;
+MRCA ZO Zea_mays Oryza_sativa;
+fixage taxon=ZO age=48;
+MRCA AP Arabidopsis_thaliana Parasponia_andersonii;
+fixage taxon=AP age=108;
+#constrain taxon=LM min_age=53 max_age=86;
+divtime method=PL crossv=yes fossilconstrained=yes；
+set smoothing=3;
+divtime method=PL algorithm=TN;
+showage;
+describe plot=cladogram;
+describe plot=phylogram;
+describe plot=chronogram;
+describe plot=ratogram;
+describe plot=phylo_description;
+describe plot=chrono_description;
+describe plot=rato_description;
+node_info;
+end;
